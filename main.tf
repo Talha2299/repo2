@@ -1,117 +1,96 @@
-provider "aws" {
-   access_key = "AKIAQVPRG34YDUBHQZMX"
-   secret_key = "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"
-   region     = "us-east-1"
-}
-
-resource "aws_instance" "new"{
-ami       = "ami-0be2609ba883822ec"
-instance_type = "t2.micro"
-  availability_zone = "us-east-1a"
-   key_name = "hey"
- network_interface {
- device_index = 0
- network_interface_id = aws_network_interface.ani.id
-}
- user_data = <<-EOF
-           #! /bin/bash
-                sudo yum update -y
-		sudo yum install -y httpd.x86_64
-		sudo service httpd start
-		sudo service httpd enable
-		echo "<h1>hey! you are done</h1>" | sudo tee /var/www/html/index.html
-	EOF
-
-tags = {
-Name = "linux"
-}
-}
-resource "aws_vpc" "vpc1" {
-cidr_block = "10.0.0.0/16"
-tags = {
-Name = "New"
-}
-}
-resource "aws_internet_gateway" "gt" {
-vpc_id = aws_vpc.vpc1.id
-tags = {
-Name = "gt1"
-}
-}
-resource "aws_route_table" "r1" {
-  vpc_id = aws_vpc.vpc1.id
-
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.gt.id
-  }
-  tags = {
-    Name = "route1"
+terraform {
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "=2.46.0"
+    }
   }
 }
-resource "aws_subnet" "sub1" {
-  vpc_id     = aws_vpc.vpc1.id
-  cidr_block = "10.0.1.0/24"
-  availability_zone = "us-east-1a"
 
-  tags = {
-    Name = "sub1"
-  }
+# Configure the Microsoft Azure Provider
+provider "azurerm" {
+  features {}
 }
-resource "aws_route_table_association" "asso" {
-  subnet_id      = aws_subnet.sub1.id
-  route_table_id = aws_route_table.r1.id
+## Azure resource group for the kubernetes cluster ##
+resource "azurerm_resource_group" "aks_demo" {
+  name     = var.resource_group_name
+  location = var.location
 }
-resource "aws_security_group" "sg1" {
-  name        = "allow_web"
-  description = "Allow web inbound traffic"
-  vpc_id      = aws_vpc.vpc1.id
 
-  ingress {
-    description = "https"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-ingress {
-    description = "http"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-ingress {
-    description = "ssh"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+## AKS kubernetes cluster ##
+resource "azurerm_kubernetes_cluster" "aks_demo" { 
+  name                = var.cluster_name
+  resource_group_name = azurerm_resource_group.aks_demo.name
+  location            = azurerm_resource_group.aks_demo.location
+  dns_prefix          = var.dns_prefix
+
+  linux_profile {
+    admin_username = var.admin_username
+
+    ## SSH key is generated using "tls_private_key" resource
+    ssh_key {
+      key_data = "${trimspace(tls_private_key.key.public_key_openssh)} ${var.admin_username}@azure.com"
+    }
   }
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+  default_node_pool {
+    name       = "default"
+    node_count = var.agent_count
+    vm_size    = "Standard_DS2_v2"
+  }
+
+  identity {
+    type = "SystemAssigned"
   }
 
   tags = {
-    Name = "sg1"
+    Environment = "Production"
   }
 }
-resource "aws_network_interface" "ani" {
-  subnet_id       = aws_subnet.sub1.id
-  private_ips     = ["10.0.1.50"]
-  security_groups = [aws_security_group.sg1.id]
 
+## Private key for the kubernetes cluster ##
+resource "tls_private_key" "key" {
+  algorithm   = "RSA"
 }
-resource "aws_eip" "one" {
-  vpc                       = true
-  network_interface         = aws_network_interface.ani.id
-  associate_with_private_ip = "10.0.1.50"
-  depends_on                = [aws_internet_gateway.gt]  
+
+## Save the private key in the local workspace ##
+resource "null_resource" "save-key" {
+  triggers = {
+    key = tls_private_key.key.private_key_pem
+  }
+
+  provisioner "local-exec" {
+    command = <<EOF
+      mkdir -p ${path.module}/.ssh
+      echo "${tls_private_key.key.private_key_pem}" > ${path.module}/.ssh/id_rsa
+      chmod 0600 ${path.module}/.ssh/id_rsa
+EOF
+  }
 }
+
+## Outputs ##
+
+# Example attributes available for output
 output "id" {
-value =  "${aws_instance.new.id}"
+    value = azurerm_kubernetes_cluster.aks_demo.id
+}
+
+output "client_key" {
+  value = azurerm_kubernetes_cluster.aks_demo.kube_config.0.client_key
+}
+
+output "client_certificate" {
+  value = azurerm_kubernetes_cluster.aks_demo.kube_config.0.client_certificate
+}
+
+output "cluster_ca_certificate" {
+  value = azurerm_kubernetes_cluster.aks_demo.kube_config.0.cluster_ca_certificate
+}
+
+output "kube_config" {
+  value = azurerm_kubernetes_cluster.aks_demo.kube_config_raw
+}
+
+output "host" {
+  value = azurerm_kubernetes_cluster.aks_demo.kube_config.0.host
 }
