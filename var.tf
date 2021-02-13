@@ -2,15 +2,13 @@ variable location {
   default = "East US"
 }
 
-## Resource group variables ##
 variable resource_group_name {
-  default = "aksdemo-rg"
+  default = "aksnew-rg"
 }
 
 
-## AKS kubernetes cluster variables ##
 variable cluster_name {
-  default = "aksdemo1"
+  default = "aksnew"
 }
 
 variable "agent_count" {
